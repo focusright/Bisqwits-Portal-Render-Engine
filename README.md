@@ -1,3 +1,17 @@
+
+# Ported To Web Assembly
+Compiled on macOS Catalina 10.15.3 (19D76). The original compilation for the native binary should still work.
+
+# WASM Build Command
+`emcc prender.c -s WASM=1 -s USE_SDL=2 -O3 -o index.js -v --preload-file map-clear.txt`
+
+# Movement Inside The Engine
+wasd + mouse
+
+<br/>
+<br/>
+## Previous README.md starts here
+
 # Bisqwit's Portal Rendering Engine
 Bisqwit's Portal Rendering Engine, written in C, updated to use SDL 2 instead of SDL 1.2 and C99 standard.
 The code is featured and talked about in [his video on making a Doom style pseudo-3D engine](https://www.youtube.com/watch?v=HQYsFshbkYw)

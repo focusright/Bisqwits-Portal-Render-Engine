@@ -3,6 +3,11 @@
 #include <math.h>
 #include <inttypes.h>
 #include <SDL2/SDL.h>
+#if __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+static int quit = 0;
 
 /* Define window size */
 #define W 608
@@ -16,8 +21,7 @@
 #define vfov (.2f*H)	// Affects the vertical field of vision
 
 /* Sectors: Floor and ceiling height; list of edge vertices and neighbors */
-static struct sector
-{
+static struct sector {
 	float floor, ceil;
 	struct xy { float x,y; } *vertex; // Each vertex has an x and y coordinate
 	int8_t *neighbors;		   // Each edge may have a corresponding neighboring sector
@@ -26,8 +30,7 @@ static struct sector
 static uint32_t NumSectors = 0;
 
 /* Player: location */
-static struct player
-{
+static struct player {
 	struct xyz { float x,y,z; } where,	  // Current position
 	velocity;   // Current motion vector
 	float angle, anglesin, anglecos, yaw;   // Looking towards (and sin() and cos() thereof)
@@ -52,8 +55,7 @@ static struct player
 	vxs(vxs(x1,y1, x2,y2), (x1)-(x2), vxs(x3,y3, x4,y4), (x3)-(x4)) / vxs((x1)-(x2), (y1)-(y2), (x3)-(x4), (y3)-(y4)), \
 	vxs(vxs(x1,y1, x2,y2), (y1)-(y2), vxs(x3,y3, x4,y4), (y3)-(y4)) / vxs((x1)-(x2), (y1)-(y2), (x3)-(x4), (y3)-(y4)) })
 
-static void LoadData()
-{
+static void LoadData() {
 	FILE *restrict fp = fopen("map-clear.txt", "rt");
 	if(!fp) { perror("map-clear.txt"); exit(1); }
 	char Buf[256], word[256], *ptr;
@@ -64,8 +66,7 @@ static void LoadData()
 	int32_t n, m, NumVertices = 0;
 	
 	while(fgets(Buf, sizeof Buf, fp))
-		switch(sscanf(ptr = Buf, "%32s%n", word, &n) == 1 ? word[0] : '\0')
-		{
+		switch(sscanf(ptr = Buf, "%32s%n", word, &n) == 1 ? word[0] : '\0') {
 			case 'v': // vertex
 				for(sscanf(ptr += n, "%f%n", &v.y, &n); sscanf(ptr += n, "%f%n", &v.x, &n) == 1; )
 					{ vert = realloc(vert, ++NumVertices * sizeof(*vert)); vert[NumVertices-1] = v; }
@@ -94,8 +95,8 @@ static void LoadData()
 	fclose(fp);
 	free(vert), vert=NULL;
 }
-static void UnloadData()
-{
+
+static void UnloadData() {
 	for(uint32_t a=0; a<NumSectors; ++a) free(sectors[a].vertex), sectors[a].vertex=NULL;
 	for(uint32_t a=0; a<NumSectors; ++a) free(sectors[a].neighbors), sectors[a].neighbors=NULL;
 	free(sectors);
@@ -106,15 +107,13 @@ static void UnloadData()
 static SDL_Surface *restrict surface = NULL;
 
 /* vline: Draw a vertical line on screen, with a different color pixel in top & bottom */
-static void vline(const int x, int y1,int y2, const int top, const int middle, const int bottom)
-{
+static void vline(const int x, int y1,int y2, const int top, const int middle, const int bottom) {
 	int32_t *const restrict pix = surface->pixels;
 	y1 = clamp(y1, 0, H-1);
 	y2 = clamp(y2, 0, H-1);
 	if(y2 == y1)
 		pix[y1*W+x] = middle;
-	else if(y2 > y1)
-	{
+	else if(y2 > y1) {
 		pix[y1*W+x] = top;
 		for(int y=y1+1; y<y2; ++y) pix[y*W+x] = middle;
 		pix[y2*W+x] = bottom;
@@ -124,8 +123,7 @@ static void vline(const int x, int y1,int y2, const int top, const int middle, c
 /* MovePlayer(dx,dy): Moves the player by (dx,dy) in the map, and
  * also updates their anglesin/anglecos/sector properties properly.
  */
-static void MovePlayer(const float dx, const float dy)
-{
+static void MovePlayer(const float dx, const float dy) {
 	const float px = player.where.x, py = player.where.y;
 	/* Check if this movement crosses one of this sector's edges
 	 * that have a neighboring sector on the other side.
@@ -262,8 +260,140 @@ static void DrawScreen()
 	} while(head != tail); // render any other queued sectors
 }
 
-int main()
-{
+int wsad[4]={0,0,0,0}, ground=0, falling=1, moving=0, ducking=0;
+float yaw = 0;
+SDL_Window *restrict window;
+SDL_Renderer *restrict renderer;
+SDL_Texture *restrict texture;
+
+#if __EMSCRIPTEN__
+void main_tick() {
+#else
+int main_tick() {
+#endif
+
+	SDL_LockSurface(surface);
+	DrawScreen();
+	SDL_UnlockSurface(surface);
+	SDL_UpdateTexture(texture, NULL, surface->pixels, surface->pitch);
+	SDL_RenderClear(renderer);
+	SDL_RenderCopy(renderer, texture, NULL, NULL);
+	SDL_RenderPresent(renderer);
+	
+	/* Vertical collision detection */
+	const float eyeheight = ducking ? DuckHeight : EyeHeight;
+	ground = !falling;
+	if(falling) {
+		player.velocity.z -= 0.05f; /* Add gravity */
+		const float nextz = player.where.z + player.velocity.z;
+		if(player.velocity.z < 0 && nextz  < sectors[player.sector].floor + eyeheight) { // When going down
+			/* Fix to ground */
+			player.where.z	= sectors[player.sector].floor + eyeheight;
+			player.velocity.z = 0;
+			falling = 0;
+			ground  = 1;
+		} else if(player.velocity.z > 0 && nextz > sectors[player.sector].ceil) { // When going up
+			/* Prevent jumping above ceiling */
+			player.velocity.z = 0;
+			falling = 1;
+		}
+		if(falling) {
+			player.where.z += player.velocity.z;
+			moving = 1;
+		}
+	}
+
+	/* Horizontal collision detection */
+	if(moving) {
+		const float px = player.where.x,	py = player.where.y;
+		float dx = player.velocity.x, dy = player.velocity.y;
+		const struct sector *const restrict sect = &sectors[player.sector];
+		const struct xy *const restrict vert = sect->vertex;
+		/* Check if the player is about to cross one of the sector's edges */
+		for(uint32_t s = 0; s < sect->npoints; ++s)
+			if(IntersectBox(px,py, px+dx,py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y)
+			&& PointSide(px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y) < 0) {
+				/* Check where the hole is. */
+				const float hole_low  = sect->neighbors[s] < 0 ?  9e9 : max(sect->floor, sectors[sect->neighbors[s]].floor);
+				const float hole_high = sect->neighbors[s] < 0 ? -9e9 : min(sect->ceil,  sectors[sect->neighbors[s]].ceil );
+				/* Check whether we're bumping into a wall. */
+				if(hole_high < player.where.z+HeadMargin
+				|| hole_low  > player.where.z-eyeheight+KneeHeight) {
+					/* Bumps into a wall! Slide along the wall. */
+					/* This formula is from Wikipedia article "vector projection". */
+					const float xd = vert[s+1].x - vert[s+0].x, yd = vert[s+1].y - vert[s+0].y;
+					dx = xd * (dx*xd + yd*dy) / (xd*xd + yd*yd);
+					dy = yd * (dx*xd + yd*dy) / (xd*xd + yd*yd);
+					moving = 0;
+				}
+			}
+		MovePlayer(dx, dy);
+		falling = 1;
+	}
+
+	SDL_Event ev;
+	while(SDL_PollEvent(&ev))
+		switch(ev.type) {
+			case SDL_KEYDOWN:
+			case SDL_KEYUP:
+				switch(ev.key.keysym.sym) {
+					case 'w': wsad[0] = ev.type==SDL_KEYDOWN; break;
+					case 's': wsad[1] = ev.type==SDL_KEYDOWN; break;
+					case 'a': wsad[2] = ev.type==SDL_KEYDOWN; break;
+					case 'd': wsad[3] = ev.type==SDL_KEYDOWN; break;
+					case 'q': quit = 1; break;
+					case ' ': /* jump */
+						if(ground) { player.velocity.z += 0.5; falling = 1; }
+						break;
+					case SDLK_LCTRL: /* duck */
+					case SDLK_RCTRL: ducking = ev.type==SDL_KEYDOWN; falling=1; break;
+					default: break;
+				}
+				break;
+			case SDL_QUIT: quit = 1;
+		}
+
+	/* mouse aiming */
+	int32_t x,y;
+	SDL_GetRelativeMouseState(&x,&y);
+	player.angle += x * 0.03f;
+	yaw	= clamp(yaw - y*0.05f, -5, 5);
+	player.yaw   = yaw - player.velocity.z*0.5f;
+	MovePlayer(0,0);
+
+	float move_vec[2] = {0.f, 0.f};
+	if(wsad[0]) { move_vec[0] += player.anglecos*0.2f; move_vec[1] += player.anglesin*0.2f; }
+	if(wsad[1]) { move_vec[0] -= player.anglecos*0.2f; move_vec[1] -= player.anglesin*0.2f; }
+	if(wsad[2]) { move_vec[0] += player.anglesin*0.2f; move_vec[1] -= player.anglecos*0.2f; }
+	if(wsad[3]) { move_vec[0] -= player.anglesin*0.2f; move_vec[1] += player.anglecos*0.2f; }
+	const int32_t pushing = wsad[0] || wsad[1] || wsad[2] || wsad[3];
+	const float acceleration = pushing ? 0.4 : 0.2;
+
+	player.velocity.x = player.velocity.x * (1-acceleration) + move_vec[0] * acceleration;
+	player.velocity.y = player.velocity.y * (1-acceleration) + move_vec[1] * acceleration;
+
+	if(pushing) moving = 1;
+
+	SDL_Delay(10);
+
+#if !__EMSCRIPTEN__
+    return 0;
+#endif
+}
+
+
+void main_loop() {
+#if __EMSCRIPTEN__
+    emscripten_set_main_loop(main_tick, -1, 1);
+#else
+    while (0 == quit) {
+        main_tick();
+    }
+#endif
+}
+
+
+int main() {
 	LoadData();
 	
 	if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -271,17 +401,17 @@ int main()
 		return 1;
 	}
 	
-	SDL_Window *restrict window = SDL_CreateWindow("Portal Renderer Engine by Bisqwit", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, W, H, SDL_WINDOW_SHOWN);
+	window = SDL_CreateWindow("Portal Renderer Engine by Bisqwit", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, W, H, SDL_WINDOW_SHOWN);
 	if (!window) {
 		fprintf(stderr, "Window could not be created: %s\n", SDL_GetError());
 		return 1;
 	}
 	
-	SDL_Renderer *restrict renderer = SDL_CreateRenderer(window, -1, 0);
+	renderer = SDL_CreateRenderer(window, -1, 0);
 	
 	//surface = SDL_SetVideoMode(W, H, 32, 0);
 	surface = SDL_CreateRGBSurface(0, W, H, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
-	SDL_Texture *restrict texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, W, H);
+	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, W, H);
 
 	if (!surface) {
 		fprintf(stderr, "Screen surface could not be created: %s\n", SDL_GetError());
@@ -291,132 +421,13 @@ int main()
 	
 	SDL_ShowCursor(SDL_DISABLE);
 	
-	int wsad[4]={0,0,0,0}, ground=0, falling=1, moving=0, ducking=0;
-	float yaw = 0;
-	for(;;)
-	{
-		SDL_LockSurface(surface);
-		DrawScreen();
-		SDL_UnlockSurface(surface);
-		//SDL_Flip(surface);
-		SDL_UpdateTexture(texture, NULL, surface->pixels, surface->pitch);
-		SDL_RenderClear(renderer);
-		SDL_RenderCopy(renderer, texture, NULL, NULL);
-		SDL_RenderPresent(renderer);
-		
-		
-		/* Vertical collision detection */
-		const float eyeheight = ducking ? DuckHeight : EyeHeight;
-		ground = !falling;
-		if(falling)
-		{
-			player.velocity.z -= 0.05f; /* Add gravity */
-			const float nextz = player.where.z + player.velocity.z;
-			if(player.velocity.z < 0 && nextz  < sectors[player.sector].floor + eyeheight) // When going down
-			{
-				/* Fix to ground */
-				player.where.z	= sectors[player.sector].floor + eyeheight;
-				player.velocity.z = 0;
-				falling = 0;
-				ground  = 1;
-			}
-			else if(player.velocity.z > 0 && nextz > sectors[player.sector].ceil) // When going up
-			{
-				/* Prevent jumping above ceiling */
-				player.velocity.z = 0;
-				falling = 1;
-			}
-			if(falling)
-			{
-				player.where.z += player.velocity.z;
-				moving = 1;
-			}
-		}
-		/* Horizontal collision detection */
-		if(moving)
-		{
-			const float px = player.where.x,	py = player.where.y;
-			float dx = player.velocity.x, dy = player.velocity.y;
+	main_loop();
 
-			const struct sector *const restrict sect = &sectors[player.sector];
-			const struct xy *const restrict vert = sect->vertex;
-			/* Check if the player is about to cross one of the sector's edges */
-			for(uint32_t s = 0; s < sect->npoints; ++s)
-				if(IntersectBox(px,py, px+dx,py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y)
-				&& PointSide(px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y) < 0)
-				{
-					/* Check where the hole is. */
-					const float hole_low  = sect->neighbors[s] < 0 ?  9e9 : max(sect->floor, sectors[sect->neighbors[s]].floor);
-					const float hole_high = sect->neighbors[s] < 0 ? -9e9 : min(sect->ceil,  sectors[sect->neighbors[s]].ceil );
-					/* Check whether we're bumping into a wall. */
-					if(hole_high < player.where.z+HeadMargin
-					|| hole_low  > player.where.z-eyeheight+KneeHeight)
-					{
-						/* Bumps into a wall! Slide along the wall. */
-						/* This formula is from Wikipedia article "vector projection". */
-						const float xd = vert[s+1].x - vert[s+0].x, yd = vert[s+1].y - vert[s+0].y;
-						dx = xd * (dx*xd + yd*dy) / (xd*xd + yd*yd);
-						dy = yd * (dx*xd + yd*dy) / (xd*xd + yd*yd);
-						moving = 0;
-					}
-				}
-			MovePlayer(dx, dy);
-			falling = 1;
-		}
-
-		SDL_Event ev;
-		while(SDL_PollEvent(&ev))
-			switch(ev.type)
-			{
-				case SDL_KEYDOWN:
-				case SDL_KEYUP:
-					switch(ev.key.keysym.sym)
-					{
-						case 'w': wsad[0] = ev.type==SDL_KEYDOWN; break;
-						case 's': wsad[1] = ev.type==SDL_KEYDOWN; break;
-						case 'a': wsad[2] = ev.type==SDL_KEYDOWN; break;
-						case 'd': wsad[3] = ev.type==SDL_KEYDOWN; break;
-						case 'q': goto done;
-						case ' ': /* jump */
-							if(ground) { player.velocity.z += 0.5; falling = 1; }
-							break;
-						case SDLK_LCTRL: /* duck */
-						case SDLK_RCTRL: ducking = ev.type==SDL_KEYDOWN; falling=1; break;
-						default: break;
-					}
-					break;
-				case SDL_QUIT: goto done;
-			}
-
-		/* mouse aiming */
-		int32_t x,y;
-		SDL_GetRelativeMouseState(&x,&y);
-		player.angle += x * 0.03f;
-		yaw	= clamp(yaw - y*0.05f, -5, 5);
-		player.yaw   = yaw - player.velocity.z*0.5f;
-		MovePlayer(0,0);
-
-		float move_vec[2] = {0.f, 0.f};
-		if(wsad[0]) { move_vec[0] += player.anglecos*0.2f; move_vec[1] += player.anglesin*0.2f; }
-		if(wsad[1]) { move_vec[0] -= player.anglecos*0.2f; move_vec[1] -= player.anglesin*0.2f; }
-		if(wsad[2]) { move_vec[0] += player.anglesin*0.2f; move_vec[1] -= player.anglecos*0.2f; }
-		if(wsad[3]) { move_vec[0] -= player.anglesin*0.2f; move_vec[1] += player.anglecos*0.2f; }
-		const int32_t pushing = wsad[0] || wsad[1] || wsad[2] || wsad[3];
-		const float acceleration = pushing ? 0.4 : 0.2;
-
-		player.velocity.x = player.velocity.x * (1-acceleration) + move_vec[0] * acceleration;
-		player.velocity.y = player.velocity.y * (1-acceleration) + move_vec[1] * acceleration;
-
-		if(pushing) moving = 1;
-
-		SDL_Delay(10);
-	}
-done:
 	UnloadData();
 	SDL_DestroyTexture(texture); texture=NULL;
 	SDL_DestroyRenderer(renderer); renderer=NULL;
-	SDL_DestroyWindow(window); window=NULL;
-
+	SDL_DestroyWindow(window); window=NULL;	
 	SDL_Quit();
+
 	return 0;
 }
