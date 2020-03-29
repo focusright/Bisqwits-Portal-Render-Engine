@@ -10,7 +10,7 @@ wasd + mouse
 
 <br/>
 <br/>
-## Previous README.md starts here
+# Previous README.md starts here
 
 # Bisqwit's Portal Rendering Engine
 Bisqwit's Portal Rendering Engine, written in C, updated to use SDL 2 instead of SDL 1.2 and C99 standard.
