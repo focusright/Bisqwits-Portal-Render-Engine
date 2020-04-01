@@ -2,11 +2,14 @@
 # Ported To Web Assembly
 Compiled on macOS Catalina 10.15.3 (19D76). The original compilation for the native binary should still work.
 
-# WASM Build Command
-`emcc prender.c -s WASM=1 -s USE_SDL=2 -O3 -o index.js -v --preload-file map-clear.txt`
+# Demo
+[Link](https://mclee.com/code/graphics/museum/bisqwit/ds-engine/)
 
 # Movement Inside The Engine
 wasd + mouse
+
+# WASM Build Command
+`emcc prender.c -s WASM=1 -s USE_SDL=2 -O3 -o index.js -v --preload-file map-clear.txt`
 
 <br/>
 <br/>
