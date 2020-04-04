@@ -8,8 +8,13 @@ Compiled on macOS Catalina 10.15.3 (19D76). The original compilation for the nat
 # Movement Inside The Engine
 wasd + mouse
 
-# WASM Build Command
+# WASM Build Commands
+
+###Optimized
 `emcc prender.c -s WASM=1 -s USE_SDL=2 -O3 -o index.js -v --preload-file map-clear.txt`
+
+###Unoptimized (in order to read index.js)
+`emcc prender.c -s WASM=1 -s USE_SDL=2 -O0 -g -o index.js -v --preload-file map-clear.txt`
 
 <br/>
 <br/>
