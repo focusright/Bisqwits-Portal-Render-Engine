@@ -10,10 +10,10 @@ wasd + mouse
 
 # WASM Build Commands
 
-###Optimized
+##Optimized
 `emcc prender.c -s WASM=1 -s USE_SDL=2 -O3 -o index.js -v --preload-file map-clear.txt`
 
-###Unoptimized (in order to read index.js)
+##Unoptimized (in order to read index.js)
 `emcc prender.c -s WASM=1 -s USE_SDL=2 -O0 -g -o index.js -v --preload-file map-clear.txt`
 
 <br/>
